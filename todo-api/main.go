@@ -79,10 +79,49 @@ func deleteTodo(w http.ResponseWriter, r *http.Request) {
 	http.Error(w, "todo not found", http.StatusNotFound)
 }
 
+func updateTodo(w http.ResponseWriter, r *http.Request) {
+	// 1. Which todo? (from the URL)
+	id, err := strconv.Atoi(r.PathValue("id"))
+	if err != nil {
+		http.Error(w, "id must be a number", http.StatusBadRequest)
+		return
+	}
+
+	// 2. What are the new values? (from the body)
+	var input Todo
+	err = json.NewDecoder(r.Body).Decode(&input)
+	if err != nil {
+		http.Error(w, "invalid JSON", http.StatusBadRequest)
+		return
+	}
+	if input.Title == "" {
+		http.Error(w, "title is required", http.StatusBadRequest)
+		return
+	}
+
+	// 3. Find it and update it
+	mu.Lock()
+	defer mu.Unlock()
+
+	for i := range todos {
+		if todos[i].ID == id {
+			todos[i].Title = input.Title
+			todos[i].Done = input.Done
+
+			w.Header().Set("Content-Type", "application/json")
+			json.NewEncoder(w).Encode(todos[i])
+			return
+		}
+	}
+
+	http.Error(w, "todo not found", http.StatusNotFound)
+}
+
 func main() {
 	http.HandleFunc("GET /todos", getTodos)
 	http.HandleFunc("POST /todos", createTodo)
 	http.HandleFunc("DELETE /todos/{id}", deleteTodo)
+	http.HandleFunc("PUT /todos/{id}", updateTodo)
 
 	fmt.Println("Listening on :8080")
 	log.Fatal(http.ListenAndServe(":8080", nil))

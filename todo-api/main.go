@@ -117,11 +117,18 @@ func updateTodo(w http.ResponseWriter, r *http.Request) {
 	http.Error(w, "todo not found", http.StatusNotFound)
 }
 
+func countTodos(w http.ResponseWriter, r *http.Request) {
+	mu.Lock()
+	defer mu.Unlock()
+	fmt.Fprint(w, len(todos))
+}
+
 func main() {
 	http.HandleFunc("GET /todos", getTodos)
 	http.HandleFunc("POST /todos", createTodo)
 	http.HandleFunc("DELETE /todos/{id}", deleteTodo)
 	http.HandleFunc("PUT /todos/{id}", updateTodo)
+	http.HandleFunc("GET /count", countTodos)
 
 	fmt.Println("Listening on :8080")
 	log.Fatal(http.ListenAndServe(":8080", nil))

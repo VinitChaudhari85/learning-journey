@@ -1,12 +1,18 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"net/http"
+	"os"
+	"os/signal"
 	"strconv"
 	"sync"
+	"syscall"
+	"time"
 )
 
 type Todo struct {
@@ -33,13 +39,12 @@ func getTodos(w http.ResponseWriter, r *http.Request) {
 
 func createTodo(w http.ResponseWriter, r *http.Request) {
 	var newTodo Todo
-	err := json.NewDecoder(r.Body).Decode(&newTodo)
-	if err != nil {
-		http.Error(w, "Invalid JSON", http.StatusBadRequest)
+	if err := decodeJSON(r, &newTodo); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
 	if newTodo.Title == "" {
-		http.Error(w, "Title is required", http.StatusBadRequest)
+		writeError(w, http.StatusBadRequest, "title is required")
 		return
 	}
 
@@ -55,15 +60,12 @@ func createTodo(w http.ResponseWriter, r *http.Request) {
 }
 
 func deleteTodo(w http.ResponseWriter, r *http.Request) {
-	// 1. READ the id from the URL
-	idStr := r.PathValue("id")
-	id, err := strconv.Atoi(idStr)
+	id, err := strconv.Atoi(r.PathValue("id"))
 	if err != nil {
-		http.Error(w, "id must be a number", http.StatusBadRequest)
+		writeError(w, http.StatusBadRequest, "id must be a number")
 		return
 	}
 
-	// 2. FIND it and remove it (locked, like before)
 	mu.Lock()
 	defer mu.Unlock()
 
@@ -75,38 +77,46 @@ func deleteTodo(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// 3. Not found
-	http.Error(w, "todo not found", http.StatusNotFound)
+	writeError(w, http.StatusNotFound, "todo not found")
+}
+
+type updateInput struct {
+	Title *string `json:"title"`
+	Done  *bool   `json:"done"`
 }
 
 func updateTodo(w http.ResponseWriter, r *http.Request) {
-	// 1. Which todo? (from the URL)
 	id, err := strconv.Atoi(r.PathValue("id"))
 	if err != nil {
-		http.Error(w, "id must be a number", http.StatusBadRequest)
+		writeError(w, http.StatusBadRequest, "id must be a number")
 		return
 	}
 
-	// 2. What are the new values? (from the body)
-	var input Todo
-	err = json.NewDecoder(r.Body).Decode(&input)
-	if err != nil {
-		http.Error(w, "invalid JSON", http.StatusBadRequest)
+	var input updateInput
+	if err := decodeJSON(r, &input); err != nil {
+		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
-	if input.Title == "" {
-		http.Error(w, "title is required", http.StatusBadRequest)
+	if input.Title == nil && input.Done == nil {
+		writeError(w, http.StatusBadRequest, "nothing to update")
+		return
+	}
+	if input.Title != nil && *input.Title == "" {
+		writeError(w, http.StatusBadRequest, "title cannot be empty")
 		return
 	}
 
-	// 3. Find it and update it
 	mu.Lock()
 	defer mu.Unlock()
 
 	for i := range todos {
 		if todos[i].ID == id {
-			todos[i].Title = input.Title
-			todos[i].Done = input.Done
+			if input.Title != nil {
+				todos[i].Title = *input.Title
+			}
+			if input.Done != nil {
+				todos[i].Done = *input.Done
+			}
 
 			w.Header().Set("Content-Type", "application/json")
 			json.NewEncoder(w).Encode(todos[i])
@@ -114,7 +124,7 @@ func updateTodo(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	http.Error(w, "todo not found", http.StatusNotFound)
+	writeError(w, http.StatusNotFound, "todo not found")
 }
 
 func countTodos(w http.ResponseWriter, r *http.Request) {
@@ -123,13 +133,48 @@ func countTodos(w http.ResponseWriter, r *http.Request) {
 	fmt.Fprint(w, len(todos))
 }
 
+func writeError(w http.ResponseWriter, status int, msg string) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	json.NewEncoder(w).Encode(map[string]string{"error": msg})
+}
+
+func decodeJSON(r *http.Request, dst any) error {
+	dec := json.NewDecoder(r.Body)
+	dec.DisallowUnknownFields()
+	return dec.Decode(dst)
+}
+
 func main() {
 	http.HandleFunc("GET /todos", getTodos)
 	http.HandleFunc("POST /todos", createTodo)
 	http.HandleFunc("DELETE /todos/{id}", deleteTodo)
 	http.HandleFunc("PUT /todos/{id}", updateTodo)
 	http.HandleFunc("GET /count", countTodos)
+	http.HandleFunc("GET /slow", func(w http.ResponseWriter, r *http.Request) {
+		time.Sleep(10 * time.Second)
+		fmt.Fprintln(w, "finished slow request")
+	})
 
-	fmt.Println("Listening on :8080")
-	log.Fatal(http.ListenAndServe(":8080", nil))
+	srv := &http.Server{Addr: ":8080"}
+
+	go func() {
+		fmt.Println("Listening on :8080")
+		if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+			log.Fatal(err)
+		}
+	}()
+
+	stop := make(chan os.Signal, 1)
+	signal.Notify(stop, os.Interrupt, syscall.SIGTERM)
+	<-stop
+
+	fmt.Println("Shutting down...")
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+
+	if err := srv.Shutdown(ctx); err != nil {
+		log.Println("forced shutdown:", err)
+	}
+	fmt.Println("Server stopped")
 }

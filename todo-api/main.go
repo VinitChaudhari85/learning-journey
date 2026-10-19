@@ -145,6 +145,14 @@ func decodeJSON(r *http.Request, dst any) error {
 	return dec.Decode(dst)
 }
 
+func logging(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		start := time.Now()
+		next.ServeHTTP(w, r)
+		log.Printf("%s %s took %v", r.Method, r.URL.Path, time.Since(start))
+	})
+}
+
 func main() {
 	http.HandleFunc("GET /todos", getTodos)
 	http.HandleFunc("POST /todos", createTodo)
@@ -156,7 +164,10 @@ func main() {
 		fmt.Fprintln(w, "finished slow request")
 	})
 
-	srv := &http.Server{Addr: ":8080"}
+	srv := &http.Server{
+		Addr:    ":8080",
+		Handler: logging(http.DefaultServeMux),
+	}
 
 	go func() {
 		fmt.Println("Listening on :8080")

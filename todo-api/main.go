@@ -153,6 +153,17 @@ func logging(next http.Handler) http.Handler {
 	})
 }
 
+func recovery(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		defer func() {
+			if err := recover(); err != nil {
+				log.Printf("panic: %v", err)
+				writeError(w, http.StatusInternalServerError, "internal server error")
+			}
+		}()
+		next.ServeHTTP(w, r)
+	})
+}
 func main() {
 	http.HandleFunc("GET /todos", getTodos)
 	http.HandleFunc("POST /todos", createTodo)
@@ -163,10 +174,13 @@ func main() {
 		time.Sleep(10 * time.Second)
 		fmt.Fprintln(w, "finished slow request")
 	})
+	http.HandleFunc("GET /panic", func(w http.ResponseWriter, r *http.Request) {
+		panic("something went wrong")
+	})
 
 	srv := &http.Server{
 		Addr:    ":8080",
-		Handler: logging(http.DefaultServeMux),
+		Handler: logging(recovery(http.DefaultServeMux)),
 	}
 
 	go func() {

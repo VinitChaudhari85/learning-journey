@@ -171,11 +171,28 @@ func main() {
 	http.HandleFunc("PUT /todos/{id}", updateTodo)
 	http.HandleFunc("GET /count", countTodos)
 	http.HandleFunc("GET /slow", func(w http.ResponseWriter, r *http.Request) {
-		time.Sleep(10 * time.Second)
-		fmt.Fprintln(w, "finished slow request")
+		select {
+		case <-time.After(10 * time.Second):
+			fmt.Println("slow handler finished")
+			fmt.Fprintln(w, "finished slow request")
+		case <-r.Context().Done():
+			fmt.Println("client left, stopping early")
+		}
 	})
 	http.HandleFunc("GET /panic", func(w http.ResponseWriter, r *http.Request) {
 		panic("something went wrong")
+	})
+	http.HandleFunc("GET /work", func(w http.ResponseWriter, r *http.Request) {
+		for step := 1; step <= 5; step++ {
+			select {
+			case <-r.Context().Done():
+				fmt.Println("client left at step", step)
+				return
+			case <-time.After(1 * time.Second):
+				fmt.Println("finished step", step)
+			}
+		}
+		fmt.Fprintln(w, "all 5 steps done")
 	})
 
 	srv := &http.Server{
